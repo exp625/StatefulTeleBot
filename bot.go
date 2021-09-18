@@ -1,4 +1,4 @@
-package telebot
+package stb
 
 import (
 	"encoding/json"
@@ -10,9 +10,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pkg/errors"
 )
+
+type RecognizerFunc func(update Update) (*User, error)
+
 
 // NewBot does try to build a Bot with token `token`, which
 // is a secret API key assigned to particular bot.
@@ -36,6 +40,10 @@ func NewBot(pref Settings) (*Bot, error) {
 		Updates: make(chan Update, pref.Updates),
 		Poller:  pref.Poller,
 
+		machines: make(map[int]*Machine),
+		events: make(map[EventType]StateType),
+		recognizer: DefaultRecognizer,
+
 		handlers:    make(map[string]interface{}),
 		synchronous: pref.Synchronous,
 		verbose:     pref.Verbose,
@@ -43,6 +51,13 @@ func NewBot(pref Settings) (*Bot, error) {
 		stop:        make(chan struct{}),
 		reporter:    pref.Reporter,
 		client:      client,
+	}
+
+	bot.states = make(map[StateType]*State)
+
+	bot.global = bot.State("")
+	if pref.Recognizer != nil{
+		bot.recognizer = pref.Recognizer
 	}
 
 	if pref.Offline {
@@ -65,6 +80,12 @@ type Bot struct {
 	URL     string
 	Updates chan Update
 	Poller  Poller
+
+	machines map[int]*Machine
+	states   map[StateType]*State
+	global *State
+	events   map[EventType]StateType
+	recognizer RecognizerFunc
 
 	handlers    map[string]interface{}
 	synchronous bool
@@ -90,6 +111,9 @@ type Settings struct {
 	// Poller is the provider of Updates.
 	Poller Poller
 
+	// Recognizer is the provider of the id
+	Recognizer RecognizerFunc
+
 	// Synchronous prevents handlers from running in parallel.
 	// It makes ProcessUpdate return after the handler is finished.
 	Synchronous bool
@@ -112,6 +136,55 @@ type Settings struct {
 
 	// Offline allows to create a bot without network for testing purposes.
 	Offline bool
+}
+
+// DefaultRecognizer is a default reconizer based on the telegram user id
+func DefaultRecognizer(upd Update) (*User, error) {
+	if upd.Message != nil {
+		if upd.Message.Sender != nil {
+			return upd.Message.Sender, nil
+		}
+	}
+
+	if upd.Callback != nil {
+		if upd.Callback.Sender != nil {
+			return upd.Callback.Sender, nil
+		}
+	}
+
+	if upd.Query != nil {
+		return &upd.Query.From, nil
+	}
+
+	if upd.ChosenInlineResult != nil {
+		return &upd.ChosenInlineResult.From, nil
+	}
+
+	if upd.ShippingQuery != nil {
+		if upd.ShippingQuery.Sender != nil {
+			return upd.ShippingQuery.Sender, nil
+		}
+	}
+
+	if upd.PreCheckoutQuery != nil {
+		if upd.PreCheckoutQuery.Sender != nil {
+			return upd.PreCheckoutQuery.Sender, nil
+		}
+	}
+
+	if upd.PollAnswer != nil {
+		return &upd.PollAnswer.User, nil
+	}
+
+	if upd.MyChatMember != nil {
+		return &upd.MyChatMember.From, nil
+	}
+
+	if upd.ChatMember != nil {
+		return &upd.ChatMember.From, nil
+	}
+
+	return nil, errors.New("No ID for update")
 }
 
 // Update object represents an incoming update.
@@ -156,14 +229,26 @@ type Command struct {
 //     b.Handle(&inlineButton, func (c *tb.Callback) {})
 //
 func (b *Bot) Handle(endpoint interface{}, handler interface{}) {
-	switch end := endpoint.(type) {
-	case string:
-		b.handlers[end] = handler
-	case CallbackEndpoint:
-		b.handlers[end.CallbackUnique()] = handler
-	default:
-		panic("telebot: unsupported endpoint")
+	b.global.Handle(endpoint, handler)
+}
+
+func (b *Bot) Event(e EventType, t StateType) {
+	b.events[e] = t
+}
+
+func (b *Bot) State (t StateType) *State {
+	state := &State{
+		Me: b.Me,
+		Type:     t,
+		handlers: make(map[string]interface{}),
+		Events:   make(map[EventType]StateType),
+		action:   nil,
+		synchronous: b.synchronous,
+		verbose:     b.verbose,
+		reporter:    b.reporter,
 	}
+	b.states[t] = state
+	return state
 }
 
 var (
@@ -199,411 +284,31 @@ func (b *Bot) Stop() {
 	b.stop <- struct{}{}
 }
 
-// ProcessUpdate processes a single incoming update.
-// A started bot calls this function automatically.
 func (b *Bot) ProcessUpdate(upd Update) {
-	if upd.Message != nil {
-		m := upd.Message
+	user, _ := b.recognizer(upd)
 
-		if m.PinnedMessage != nil {
-			b.handle(OnPinned, m)
-			return
-		}
-
-		// Commands
-		if m.Text != "" {
-			// Filtering malicious messages
-			if m.Text[0] == '\a' {
-				return
-			}
-
-			match := cmdRx.FindAllStringSubmatch(m.Text, -1)
-			if match != nil {
-				// Syntax: "</command>@<bot> <payload>"
-
-				command, botName := match[0][1], match[0][3]
-				if botName != "" && !strings.EqualFold(b.Me.Username, botName) {
-					return
-				}
-
-				m.Payload = match[0][5]
-				if b.handle(command, m) {
-					return
-				}
-			}
-
-			// 1:1 satisfaction
-			if b.handle(m.Text, m) {
-				return
-			}
-
-			b.handle(OnText, m)
-			return
-		}
-
-		if b.handleMedia(m) {
-			return
-		}
-
-		if m.Invoice != nil {
-			b.handle(OnInvoice, m)
-			return
-		}
-
-		if m.Payment != nil {
-			b.handle(OnPayment, m)
-			return
-		}
-
-		wasAdded := (m.UserJoined != nil && m.UserJoined.ID == b.Me.ID) ||
-			(m.UsersJoined != nil && isUserInList(b.Me, m.UsersJoined))
-		if m.GroupCreated || m.SuperGroupCreated || wasAdded {
-			b.handle(OnAddedToGroup, m)
-			return
-		}
-
-		if m.UsersJoined != nil {
-			for index := range m.UsersJoined {
-				// Shallow copy message to prevent data race in async mode
-				mm := *m
-				mm.UserJoined = &m.UsersJoined[index]
-				b.handle(OnUserJoined, &mm)
-			}
-			return
-		}
-
-		if m.UserJoined != nil {
-			b.handle(OnUserJoined, m)
-			return
-		}
-
-		if m.UserLeft != nil {
-			b.handle(OnUserLeft, m)
-			return
-		}
-
-		if m.NewGroupTitle != "" {
-			b.handle(OnNewGroupTitle, m)
-			return
-		}
-
-		if m.NewGroupPhoto != nil {
-			b.handle(OnNewGroupPhoto, m)
-			return
-		}
-
-		if m.GroupPhotoDeleted {
-			b.handle(OnGroupPhotoDeleted, m)
-			return
-		}
-
-		if m.MigrateTo != 0 {
-			if handler, ok := b.handlers[OnMigration]; ok {
-				handler, ok := handler.(func(int64, int64))
-				if !ok {
-					panic("telebot: migration handler is bad")
-				}
-
-				b.runHandler(func() { handler(m.Chat.ID, m.MigrateTo) })
-			}
-
-			return
-		}
-
-		if m.VoiceChatStarted != nil {
-			if handler, ok := b.handlers[OnVoiceChatStarted]; ok {
-				handler, ok := handler.(func(*Message))
-				if !ok {
-					panic("telebot: voice chat started handler is bad")
-				}
-
-				b.runHandler(func() { handler(m) })
-			}
-
-			return
-		}
-
-		if m.VoiceChatEnded != nil {
-			if handler, ok := b.handlers[OnVoiceChatEnded]; ok {
-				handler, ok := handler.(func(*Message))
-				if !ok {
-					panic("telebot: voice chat ended handler is bad")
-				}
-
-				b.runHandler(func() { handler(m) })
-			}
-
-			return
-		}
-
-		if m.VoiceChatParticipantsInvited != nil {
-			if handler, ok := b.handlers[OnVoiceChatParticipantsInvited]; ok {
-				handler, ok := handler.(func(*Message))
-				if !ok {
-					panic("telebot: voice chat participants invited handler is bad")
-				}
-
-				b.runHandler(func() { handler(m) })
-			}
-
-			return
-		}
-
-		if m.ProximityAlert != nil {
-			if handler, ok := b.handlers[OnProximityAlert]; ok {
-				handler, ok := handler.(func(*Message))
-				if !ok {
-					panic("telebot: proximity alert handler is bad")
-				}
-
-				b.runHandler(func() { handler(m) })
-			}
-
-			return
-		}
-
-		if m.AutoDeleteTimer != nil {
-			if handler, ok := b.handlers[OnAutoDeleteTimer]; ok {
-				handler, ok := handler.(func(*Message))
-				if !ok {
-					panic("telebot: auto delete timer handler is bad")
-				}
-
-				b.runHandler(func() { handler(m) })
-			}
-
-			return
-		}
-
-		if m.VoiceChatSchedule != nil {
-			if handler, ok := b.handlers[OnVoiceChatScheduled]; ok {
-				handler, ok := handler.(func(*Message))
-				if !ok {
-					panic("telebot: voice chat scheduled is bad")
-				}
-
-				b.runHandler(func() { handler(m) })
-			}
-
-			return
-		}
-	}
-
-	if upd.EditedMessage != nil {
-		b.handle(OnEdited, upd.EditedMessage)
-		return
-	}
-
-	if upd.ChannelPost != nil {
-		m := upd.ChannelPost
-
-		if m.PinnedMessage != nil {
-			b.handle(OnPinned, m)
-			return
-		}
-
-		b.handle(OnChannelPost, upd.ChannelPost)
-		return
-	}
-
-	if upd.EditedChannelPost != nil {
-		b.handle(OnEditedChannelPost, upd.EditedChannelPost)
-		return
-	}
-
-	if upd.Callback != nil {
-		if upd.Callback.Data != "" {
-			if upd.Callback.MessageID != "" {
-				upd.Callback.Message = &Message{
-					// InlineID indicates that message
-					// is inline so we have only its id
-					InlineID: upd.Callback.MessageID,
-				}
-			}
-
-			data := upd.Callback.Data
-			if data[0] == '\f' {
-				match := cbackRx.FindAllStringSubmatch(data, -1)
-				if match != nil {
-					unique, payload := match[0][1], match[0][3]
-
-					if handler, ok := b.handlers["\f"+unique]; ok {
-						handler, ok := handler.(func(*Callback))
-						if !ok {
-							panic(fmt.Errorf("telebot: %s callback handler is bad", unique))
-						}
-
-						upd.Callback.Data = payload
-						b.runHandler(func() { handler(upd.Callback) })
-
-						return
-					}
-				}
-			}
-		}
-
-		if handler, ok := b.handlers[OnCallback]; ok {
-			handler, ok := handler.(func(*Callback))
-			if !ok {
-				panic("telebot: callback handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.Callback) })
-		}
-
-		return
-	}
-
-	if upd.Query != nil {
-		if handler, ok := b.handlers[OnQuery]; ok {
-			handler, ok := handler.(func(*Query))
-			if !ok {
-				panic("telebot: query handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.Query) })
-		}
-
-		return
-	}
-
-	if upd.ChosenInlineResult != nil {
-		if handler, ok := b.handlers[OnChosenInlineResult]; ok {
-			handler, ok := handler.(func(*ChosenInlineResult))
-			if !ok {
-				panic("telebot: chosen inline result handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.ChosenInlineResult) })
-		}
-
-		return
-	}
-
-	if upd.ShippingQuery != nil {
-		if handler, ok := b.handlers[OnShipping]; ok {
-			handler, ok := handler.(func(*ShippingQuery))
-			if !ok {
-				panic("telebot: shipping query handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.ShippingQuery) })
-		}
-
-		return
-	}
-
-	if upd.PreCheckoutQuery != nil {
-		if handler, ok := b.handlers[OnCheckout]; ok {
-			handler, ok := handler.(func(*PreCheckoutQuery))
-			if !ok {
-				panic("telebot: pre checkout query handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.PreCheckoutQuery) })
-		}
-
-		return
-	}
-
-	if upd.Poll != nil {
-		if handler, ok := b.handlers[OnPoll]; ok {
-			handler, ok := handler.(func(*Poll))
-			if !ok {
-				panic("telebot: poll handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.Poll) })
-		}
-
-		return
-	}
-
-	if upd.PollAnswer != nil {
-		if handler, ok := b.handlers[OnPollAnswer]; ok {
-			handler, ok := handler.(func(*PollAnswer))
-			if !ok {
-				panic("telebot: poll answer handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.PollAnswer) })
-		}
-
-		return
-	}
-
-	if upd.MyChatMember != nil {
-		if handler, ok := b.handlers[OnMyChatMember]; ok {
-			handler, ok := handler.(func(*ChatMemberUpdated))
-			if !ok {
-				panic("telebot: my chat member handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.MyChatMember) })
-		}
-
-		return
-	}
-
-	if upd.ChatMember != nil {
-		if handler, ok := b.handlers[OnChatMember]; ok {
-			handler, ok := handler.(func(*ChatMemberUpdated))
-			if !ok {
-				panic("telebot: chat member handler is bad")
-			}
-
-			b.runHandler(func() { handler(upd.ChatMember) })
-		}
-
-		return
-	}
-}
-
-func (b *Bot) handle(end string, m *Message) bool {
-	if handler, ok := b.handlers[end]; ok {
-		handler, ok := handler.(func(*Message))
+	if user != nil {
+		machine, ok := b.machines[user.ID]
 		if !ok {
-			panic(fmt.Errorf("telebot: %s handler is bad", end))
+			machine = &Machine{
+				current: Default,
+				states:  b.states,
+				who:     user,
+				globalEvents: b.events,
+				mutex:   sync.Mutex{},
+			}
+			b.machines[user.ID] = machine
 		}
-
-		b.runHandler(func() { handler(m) })
-
-		return true
+		state := b.states[machine.current]
+		if state.processUpdate(upd, machine) {
+			return
+		}
+		if b.global.processUpdate(upd, machine) {
+			return
+		}
 	}
+	b.global.processUpdate(upd, nil)
 
-	return false
-}
-
-func (b *Bot) handleMedia(m *Message) bool {
-	switch {
-	case m.Photo != nil:
-		b.handle(OnPhoto, m)
-	case m.Voice != nil:
-		b.handle(OnVoice, m)
-	case m.Audio != nil:
-		b.handle(OnAudio, m)
-	case m.Animation != nil:
-		b.handle(OnAnimation, m)
-	case m.Document != nil:
-		b.handle(OnDocument, m)
-	case m.Sticker != nil:
-		b.handle(OnSticker, m)
-	case m.Video != nil:
-		b.handle(OnVideo, m)
-	case m.VideoNote != nil:
-		b.handle(OnVideoNote, m)
-	case m.Contact != nil:
-		b.handle(OnContact, m)
-	case m.Location != nil:
-		b.handle(OnLocation, m)
-	case m.Venue != nil:
-		b.handle(OnVenue, m)
-	case m.Dice != nil:
-		b.handle(OnDice, m)
-	default:
-		return false
-	}
-	return true
 }
 
 // Send accepts 2+ arguments, starting with destination chat, followed by

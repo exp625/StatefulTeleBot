@@ -1,4 +1,4 @@
-package telebot
+package stb
 
 import (
 	"bytes"
@@ -10,6 +10,15 @@ import (
 	"strconv"
 )
 
+func (s *State) debug(err error) {
+	err = errors.WithStack(err)
+	if s.reporter != nil {
+		s.reporter(err)
+	} else {
+		log.Printf("%+v\n", err)
+	}
+}
+
 func (b *Bot) debug(err error) {
 	err = errors.WithStack(err)
 	if b.reporter != nil {
@@ -19,27 +28,17 @@ func (b *Bot) debug(err error) {
 	}
 }
 
-func (b *Bot) deferDebug() {
+func (s *State) deferDebug() {
 	if r := recover(); r != nil {
 		if err, ok := r.(error); ok {
-			b.debug(err)
+			s.debug(err)
 		} else if str, ok := r.(string); ok {
-			b.debug(errors.Errorf("%s", str))
+			s.debug(errors.Errorf("%s", str))
 		}
 	}
 }
 
-func (b *Bot) runHandler(handler func()) {
-	f := func() {
-		defer b.deferDebug()
-		handler()
-	}
-	if b.synchronous {
-		f()
-	} else {
-		go f()
-	}
-}
+
 
 // wrapError returns new wrapped telebot-related error.
 func wrapError(err error) error {

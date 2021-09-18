@@ -21,3 +21,5 @@ data
 # vendor/
 
 *.pem
+
+/main

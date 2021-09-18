@@ -26,7 +26,7 @@
 //			b.Start()
 //		}
 //
-package telebot
+package stb
 
 import "github.com/pkg/errors"
 
@@ -48,6 +48,7 @@ const (
 	//
 	// Handler: func(*Message)
 	OnText              = "\atext"
+	OnCommand			= "\acommand"
 	OnPhoto             = "\aphoto"
 	OnAudio             = "\aaudio"
 	OnAnimation         = "\aanimation"

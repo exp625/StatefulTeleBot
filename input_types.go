@@ -1,4 +1,4 @@
-package telebot
+package stb
 
 // InputMessageContent objects represent the content of a message to be sent
 // as a result of an inline query.
