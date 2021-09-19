@@ -10,7 +10,7 @@ type StateType string
 const Default StateType = "Default"
 
 type State struct {
-	Me      *User
+	Me       *User
 	Type     StateType
 	handlers map[string]interface{}
 	Events   map[EventType]StateType
@@ -36,12 +36,11 @@ func (s *State) Action(handler interface{}) {
 	s.action = handler
 }
 
-func (s *State) AddEvent(e EventType, t StateType) {
+func (s *State) Event(e EventType, t StateType) {
 	s.Events[e] = t
 }
 
-
-func (s State) processUpdate (upd Update, m *Machine) bool {
+func (s State) processUpdate(upd Update, m *Machine) bool {
 
 	if upd.Message != nil {
 		msh := upd.Message
@@ -434,7 +433,6 @@ func (s *State) runHandler(handler func()) {
 		go f()
 	}
 }
-
 
 func (s *State) handle(end string, msg *Message, m *Machine) bool {
 

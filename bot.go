@@ -17,7 +17,6 @@ import (
 
 type RecognizerFunc func(update Update) (*User, error)
 
-
 // NewBot does try to build a Bot with token `token`, which
 // is a secret API key assigned to particular bot.
 func NewBot(pref Settings) (*Bot, error) {
@@ -40,8 +39,8 @@ func NewBot(pref Settings) (*Bot, error) {
 		Updates: make(chan Update, pref.Updates),
 		Poller:  pref.Poller,
 
-		machines: make(map[int]*Machine),
-		events: make(map[EventType]StateType),
+		machines:   make(map[int]*Machine),
+		events:     make(map[EventType]StateType),
 		recognizer: DefaultRecognizer,
 
 		handlers:    make(map[string]interface{}),
@@ -56,7 +55,7 @@ func NewBot(pref Settings) (*Bot, error) {
 	bot.states = make(map[StateType]*State)
 
 	bot.global = bot.State("")
-	if pref.Recognizer != nil{
+	if pref.Recognizer != nil {
 		bot.recognizer = pref.Recognizer
 	}
 
@@ -81,11 +80,12 @@ type Bot struct {
 	Updates chan Update
 	Poller  Poller
 
-	machines map[int]*Machine
-	states   map[StateType]*State
-	global *State
-	events   map[EventType]StateType
-	recognizer RecognizerFunc
+	machines     map[int]*Machine
+	states       map[StateType]*State
+	defaultState StateType
+	global       *State
+	events       map[EventType]StateType
+	recognizer   RecognizerFunc
 
 	handlers    map[string]interface{}
 	synchronous bool
@@ -236,13 +236,18 @@ func (b *Bot) Event(e EventType, t StateType) {
 	b.events[e] = t
 }
 
-func (b *Bot) State (t StateType) *State {
+func (b *Bot) Default(t StateType) *State {
+	b.defaultState = t
+	return b.State(t)
+}
+
+func (b *Bot) State(t StateType) *State {
 	state := &State{
-		Me: b.Me,
-		Type:     t,
-		handlers: make(map[string]interface{}),
-		Events:   make(map[EventType]StateType),
-		action:   nil,
+		Me:          b.Me,
+		Type:        t,
+		handlers:    make(map[string]interface{}),
+		Events:      make(map[EventType]StateType),
+		action:      nil,
 		synchronous: b.synchronous,
 		verbose:     b.verbose,
 		reporter:    b.reporter,
@@ -260,7 +265,11 @@ var (
 // updates (see Bot.Updates channel).
 func (b *Bot) Start() {
 	if b.Poller == nil {
-		panic("telebot: can't start without a poller")
+		panic("stb: can't start without a poller")
+	}
+
+	if b.defaultState == "" {
+		panic("stb: can't start without a default state")
 	}
 
 	stop := make(chan struct{})
@@ -291,11 +300,11 @@ func (b *Bot) ProcessUpdate(upd Update) {
 		machine, ok := b.machines[user.ID]
 		if !ok {
 			machine = &Machine{
-				current: Default,
-				states:  b.states,
-				who:     user,
+				current:      b.defaultState,
+				states:       b.states,
+				who:          user,
 				globalEvents: b.events,
-				mutex:   sync.Mutex{},
+				mutex:        sync.Mutex{},
 			}
 			b.machines[user.ID] = machine
 		}
@@ -370,7 +379,7 @@ func (b *Bot) SendAlbum(to Recipient, a Album, options ...interface{}) ([]Messag
 			repr = "attach://" + strconv.Itoa(i)
 			files[strconv.Itoa(i)] = *file
 		default:
-			return nil, errors.Errorf("telebot: album entry #%d does not exist", i)
+			return nil, errors.Errorf("stb: album entry #%d does not exist", i)
 		}
 
 		switch y := x.(type) {
@@ -437,7 +446,7 @@ func (b *Bot) SendAlbum(to Recipient, a Album, options ...interface{}) ([]Messag
 				ParseMode: sendOpts.ParseMode,
 			})
 		default:
-			return nil, errors.Errorf("telebot: album entry #%d is not valid", i)
+			return nil, errors.Errorf("stb: album entry #%d is not valid", i)
 		}
 
 		media[i] = string(data)
@@ -718,7 +727,7 @@ func (b *Bot) EditMedia(msg Editable, media InputMedia, options ...interface{}) 
 		repr = "attach://" + s
 		files[s] = *file
 	default:
-		return nil, errors.Errorf("telebot: can't edit media, it does not exist")
+		return nil, errors.Errorf("stb: can't edit media, it does not exist")
 	}
 
 	type FileJSON struct {
@@ -778,7 +787,7 @@ func (b *Bot) EditMedia(msg Editable, media InputMedia, options ...interface{}) 
 		result.Performer = m.Performer
 		thumb = m.Thumbnail
 	default:
-		return nil, errors.Errorf("telebot: media entry is not valid")
+		return nil, errors.Errorf("stb: media entry is not valid")
 	}
 
 	msgID, chatID := msg.MessageSig()
@@ -1022,7 +1031,7 @@ func (b *Bot) GetFile(file *File) (io.ReadCloser, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, errors.Errorf("telebot: expected status 200 but got %s", resp.Status)
+		return nil, errors.Errorf("stb: expected status 200 but got %s", resp.Status)
 	}
 
 	return resp.Body, nil
@@ -1447,8 +1456,8 @@ func (b *Bot) EditInviteLink(chat *Chat, link *ChatInviteLink) (*ChatInviteLink,
 // RevokeInviteLink revokes an invite link created by the bot.
 func (b *Bot) RevokeInviteLink(chat *Chat, link string) (*ChatInviteLink, error) {
 	params := map[string]string{
-		"chat_id": chat.Recipient(),
-		"invite_link":    link,
+		"chat_id":     chat.Recipient(),
+		"invite_link": link,
 	}
 
 	data, err := b.Raw("revokeChatInviteLink", params)

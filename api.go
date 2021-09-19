@@ -50,7 +50,7 @@ func (b *Bot) Raw(method string, payload interface{}) ([]byte, error) {
 			return buf.String()
 		}
 
-		log.Printf("[verbose] telebot: sent request\n"+
+		log.Printf("[verbose] stb: sent request\n"+
 			"Method: %v\nParams: %v\nResponse: %v",
 			method, indent(body), indent(data))
 	}
@@ -72,7 +72,7 @@ func (b *Bot) sendFiles(method string, files map[string]File, params map[string]
 		case f.FileReader != nil:
 			rawFiles[name] = f.FileReader
 		default:
-			return nil, fmt.Errorf("telebot: File for field %s doesn't exist", name)
+			return nil, fmt.Errorf("stb: File for field %s doesn't exist", name)
 		}
 	}
 
@@ -139,7 +139,7 @@ func addFileToWriter(writer *multipart.Writer, filename, field string, file inte
 		defer f.Close()
 		reader = f
 	} else {
-		return fmt.Errorf("telebot: File for field %v should be an io.ReadCloser or string", field)
+		return fmt.Errorf("stb: File for field %v should be an io.ReadCloser or string", field)
 	}
 
 	part, err := writer.CreateFormFile(field, filename)

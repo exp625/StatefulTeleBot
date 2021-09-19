@@ -31,10 +31,10 @@ package stb
 import "github.com/pkg/errors"
 
 var (
-	ErrBadRecipient    = errors.New("telebot: recipient is nil")
-	ErrUnsupportedWhat = errors.New("telebot: unsupported what argument")
-	ErrCouldNotUpdate  = errors.New("telebot: could not fetch new updates")
-	ErrTrueResult      = errors.New("telebot: result is True")
+	ErrBadRecipient    = errors.New("stb: recipient is nil")
+	ErrUnsupportedWhat = errors.New("stb: unsupported what argument")
+	ErrCouldNotUpdate  = errors.New("stb: could not fetch new updates")
+	ErrTrueResult      = errors.New("stb: result is True")
 )
 
 const DefaultApiURL = "https://api.telegram.org"
@@ -48,7 +48,7 @@ const (
 	//
 	// Handler: func(*Message)
 	OnText              = "\atext"
-	OnCommand			= "\acommand"
+	OnCommand           = "\acommand"
 	OnPhoto             = "\aphoto"
 	OnAudio             = "\aaudio"
 	OnAnimation         = "\aanimation"

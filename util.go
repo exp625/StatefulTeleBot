@@ -38,8 +38,6 @@ func (s *State) deferDebug() {
 	}
 }
 
-
-
 // wrapError returns new wrapped telebot-related error.
 func wrapError(err error) error {
 	return errors.Wrap(err, "telebot")
@@ -147,12 +145,12 @@ func extractOptions(how []interface{}) *SendOptions {
 				}
 				opts.ReplyMarkup.OneTimeKeyboard = true
 			default:
-				panic("telebot: unsupported flag-option")
+				panic("stb: unsupported flag-option")
 			}
 		case ParseMode:
 			opts.ParseMode = opt
 		default:
-			panic("telebot: unsupported send-option")
+			panic("stb: unsupported send-option")
 		}
 	}
 

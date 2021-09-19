@@ -182,7 +182,7 @@ func (r *ReplyMarkup) Inline(rows ...Row) {
 			btn := btn.Inline()
 			if btn == nil {
 				panic(fmt.Sprintf(
-					"telebot: button row %d column %d is not an inline button",
+					"stb: button row %d column %d is not an inline button",
 					i, j))
 			}
 			keys = append(keys, *btn)
@@ -201,7 +201,7 @@ func (r *ReplyMarkup) Reply(rows ...Row) {
 			btn := btn.Reply()
 			if btn == nil {
 				panic(fmt.Sprintf(
-					"telebot: button row %d column %d is not a reply button",
+					"stb: button row %d column %d is not a reply button",
 					i, j))
 			}
 			keys = append(keys, *btn)

@@ -6,7 +6,6 @@ import (
 	"sync"
 )
 
-
 // ErrEventRejected is the error returned when the state machine cannot process
 // an event in the state that it is in.
 var ErrEventRejected = errors.New("event rejected")
@@ -15,11 +14,11 @@ var ErrEventRejected = errors.New("event rejected")
 type Machine struct {
 	// Current represents the current state.
 	current StateType
-	who *User
-	ctx interface{}
+	who     *User
+	ctx     interface{}
 
 	// states holds the configuration of states and events handled by the state machine.
-	states map[StateType]*State
+	states       map[StateType]*State
 	globalEvents map[EventType]StateType
 
 	// mutex ensures that only 1 event is processed by the state machine at any given time.
@@ -84,7 +83,7 @@ func (m *Machine) Get() interface{} {
 	return m.ctx
 }
 
-func (m *Machine) Set(ctx interface{})  {
+func (m *Machine) Set(ctx interface{}) {
 	m.ctx = ctx
 }
 

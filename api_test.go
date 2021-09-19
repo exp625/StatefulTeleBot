@@ -67,7 +67,7 @@ func TestRaw(t *testing.T) {
 	b.client = srv.Client()
 
 	_, err = b.Raw("testReadError", nil)
-	assert.EqualError(t, err, "telebot: "+io.ErrUnexpectedEOF.Error())
+	assert.EqualError(t, err, "stb: "+io.ErrUnexpectedEOF.Error())
 
 	_, err = b.Raw("testUnknownError", nil)
 	assert.EqualError(t, err, "telegram unknown: unknown error (400)")
